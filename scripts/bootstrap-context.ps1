@@ -73,8 +73,8 @@ $ExistingGitJson = & kubectl --context $Context -n flux-system get gitrepository
 if ($LASTEXITCODE -ne 0) { throw "Unable to inspect GitRepository/lab-config in '$Context'." }
 if ($ExistingGitJson) {
     $ExistingGit = $ExistingGitJson | ConvertFrom-Json
-    $ExistingSecret = $ExistingGit.spec.secretRef.name
-    if ($ExistingGit.spec.url -ne $GitUrl -or $ExistingSecret -ne $GitSecretName) {
+    $ExistingSecret = [string]$ExistingGit.spec.secretRef.name
+    if ($ExistingGit.spec.url -ne $GitUrl -or $ExistingSecret -ne [string]$GitSecretName) {
         throw "GitRepository/lab-config already exists in '$Context' with a different URL or authentication Secret. Resolve the ownership conflict before onboarding."
     }
 }

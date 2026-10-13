@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-foreach ($tool in @('kubectl', 'clusteradm')) {
+foreach ($tool in @('kubectl', 'clusteradm', 'helm')) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Required command '$tool' was not found in PATH." }
 }
 & kubectl --context $HubContext get clustermanager cluster-manager *> $null
@@ -28,13 +28,77 @@ if (-not $IsJoined) {
     $TokenOutput = & clusteradm get token --context $HubContext 2>&1
     if ($LASTEXITCODE -ne 0) { throw 'Unable to obtain an OCM join token.' }
     $TokenText = $TokenOutput -join ' '
-    $TokenMatch = [regex]::Match($TokenText, '--hub-token(?:=|\s+)(?:"([^"]+)"|(\S+))')
-    $ApiMatch = [regex]::Match($TokenText, '--hub-apiserver(?:=|\s+)(?:"([^"]+)"|(\S+))')
-    if (-not $TokenMatch.Success -or -not $ApiMatch.Success) { throw 'Could not parse the join token and API endpoint from clusteradm output.' }
+    $TokenMatch = [regex]::Match($TokenText, '(?:^|\s)token=(\S+)')
+    if (-not $TokenMatch.Success) { $TokenMatch = [regex]::Match($TokenText, '--hub-token(?:=|\s+)(?:"([^"]+)"|(\S+))') }
+    if (-not $TokenMatch.Success) { throw 'Could not parse the OCM bootstrap token from clusteradm output.' }
     $Token = if ($TokenMatch.Groups[1].Success) { $TokenMatch.Groups[1].Value } else { $TokenMatch.Groups[2].Value }
-    $Api = if ($ApiMatch.Groups[1].Success) { $ApiMatch.Groups[1].Value } else { $ApiMatch.Groups[2].Value }
-    & clusteradm join --hub-token $Token --hub-apiserver $Api --wait --cluster-name $ClusterName --force-internal-endpoint-lookup --context $Context
-    if ($LASTEXITCODE -ne 0) { throw "OCM join failed for '$Context'. Verify that the managed cluster can reach the local hub." }
+
+    $KlusterletCrd = & kubectl --context $Context get crd klusterlets.operator.open-cluster-management.io --ignore-not-found -o name
+    if ($LASTEXITCODE -ne 0) { throw "Unable to inspect klusterlet API on '$Context'." }
+    $ExistingKlusterlet = @()
+    if ($KlusterletCrd) {
+        $ExistingKlusterlet = & kubectl --context $Context get klusterlet klusterlet --ignore-not-found -o name
+        if ($LASTEXITCODE -ne 0) { throw "Unable to inspect klusterlet on '$Context'." }
+    }
+    if (-not $ExistingKlusterlet) {
+        $ApiMatch = [regex]::Match($TokenText, '--hub-apiserver(?:=|\s+)(?:"([^"]+)"|(\S+))')
+        if (-not $ApiMatch.Success) { throw 'Could not parse the OCM API endpoint from clusteradm output.' }
+        $Api = if ($ApiMatch.Groups[1].Success) { $ApiMatch.Groups[1].Value } else { $ApiMatch.Groups[2].Value }
+        & clusteradm join --hub-token $Token --hub-apiserver $Api --bundle-version v1.3.1 --wait --cluster-name $ClusterName --force-internal-endpoint-lookup --context $Context
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning 'clusteradm join could not render its embedded chart; installing the official OCM klusterlet chart v1.3.1.'
+            & helm repo add ocm https://open-cluster-management.io/helm-charts --force-update
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to add the official OCM Helm repository.' }
+            & helm repo update ocm
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to update the official OCM Helm repository.' }
+
+            $HubConfigJson = & kubectl --context $HubContext config view --raw --flatten --minify -o json
+            if ($LASTEXITCODE -ne 0) { throw "Unable to read the hub CA from context '$HubContext'." }
+            $HubConfig = $HubConfigJson | ConvertFrom-Json
+            $CaData = $HubConfig.clusters[0].cluster.'certificate-authority-data'
+            if (-not $CaData) { throw 'The OCM hub kubeconfig has no embedded CA certificate.' }
+            $HubClusterName = $HubContext -replace '^k3d-', ''
+            $BootstrapPath = Join-Path ([System.IO.Path]::GetTempPath()) ("ocm-bootstrap-{0}-{1}.yaml" -f $ClusterName, [guid]::NewGuid().ToString('N'))
+            try {
+                $BootstrapConfig = @"
+apiVersion: v1
+kind: Config
+clusters:
+- name: hub
+  cluster:
+    server: https://k3d-$HubClusterName-server-0:6443
+    certificate-authority-data: $CaData
+users:
+- name: bootstrap
+  user:
+    token: $Token
+contexts:
+- name: bootstrap
+  context:
+    cluster: hub
+    user: bootstrap
+current-context: bootstrap
+"@
+                [System.IO.File]::WriteAllText($BootstrapPath, $BootstrapConfig, [System.Text.UTF8Encoding]::new($false))
+                $SetFile = 'bootstrapHubKubeConfig=' + $BootstrapPath.Replace('\', '/')
+                & helm upgrade --install klusterlet ocm/klusterlet --version 1.3.1 --kube-context $Context --namespace open-cluster-management --create-namespace --set images.tag=v1.3.1 --set klusterlet.mode=Default --set "klusterlet.clusterName=$ClusterName" --set klusterlet.namespace=open-cluster-management-agent --set-file $SetFile --wait --timeout 5m
+                if ($LASTEXITCODE -ne 0) { throw "Unable to install OCM klusterlet on '$Context'." }
+            }
+            finally { Remove-Item -LiteralPath $BootstrapPath -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    $RegistrationRequestReady = $false
+    for ($Attempt = 0; $Attempt -lt 36; $Attempt++) {
+        $ManagedClusterRequest = & kubectl --context $HubContext get managedcluster $ClusterName --ignore-not-found -o name
+        if ($LASTEXITCODE -ne 0) { throw "Unable to inspect pending OCM registration for '$ClusterName'." }
+        $CsrJson = & kubectl --context $HubContext get csr -o json
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect OCM certificate signing requests.' }
+        $CsrList = $CsrJson | ConvertFrom-Json
+        $CsrRequest = $CsrList.items | Where-Object { $_.metadata.name -like "$ClusterName-*" } | Select-Object -First 1
+        if ($ManagedClusterRequest -and $CsrRequest) { $RegistrationRequestReady = $true; break }
+        Start-Sleep -Seconds 5
+    }
+    if (-not $RegistrationRequestReady) { throw "Timed out waiting for OCM registration request from '$ClusterName'." }
     & clusteradm accept --clusters $ClusterName --context $HubContext
     if ($LASTEXITCODE -ne 0) { throw "OCM registration approval failed for '$ClusterName'." }
 }

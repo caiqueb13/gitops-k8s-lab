@@ -83,17 +83,62 @@ bootstrap_context() {
 register_ocm_cluster() {
   local context="$1" cluster_name="$2" hub_context="$3" managed_by="$4"
   local current joined token_output token api
-  require_commands kubectl clusteradm
+  require_commands kubectl clusteradm helm jq
   kubectl --context "$hub_context" get clustermanager cluster-manager >/dev/null
   check_context "$context"
   current="$(kubectl --context "$hub_context" get managedcluster "$cluster_name" --ignore-not-found -o json)"
   joined="$(jq -r 'select(.spec.hubAcceptsClient == true) | [.status.conditions[]? | select(.type == "ManagedClusterJoined" and .status == "True")] | length' <<<"$current" 2>/dev/null || printf '0')"
   if [[ "$joined" != "1" ]]; then
     token_output="$(clusteradm get token --context "$hub_context" 2>&1)"
-    token="$(sed -nE 's/.*--hub-token(=|[[:space:]]+)([^[:space:]]+).*/\2/p' <<<"$token_output" | head -n1)"
+    token="$(sed -nE 's/^[[:space:]]*token=([^[:space:]]+).*/\1/p' <<<"$token_output" | head -n1)"
+    [[ -n "$token" ]] || token="$(sed -nE 's/.*--hub-token(=|[[:space:]]+)([^[:space:]]+).*/\2/p' <<<"$token_output" | head -n1)"
     api="$(sed -nE 's/.*--hub-apiserver(=|[[:space:]]+)([^[:space:]]+).*/\2/p' <<<"$token_output" | head -n1)"
-    [[ -n "$token" && -n "$api" ]] || { printf 'Could not parse OCM token/API endpoint from clusteradm output.\n' >&2; return 1; }
-    clusteradm join --hub-token "$token" --hub-apiserver "$api" --wait --cluster-name "$cluster_name" --force-internal-endpoint-lookup --context "$context"
+    [[ -n "$token" ]] || { printf 'Could not parse OCM bootstrap token from clusteradm output.\n' >&2; return 1; }
+    if ! kubectl --context "$context" get klusterlet klusterlet --ignore-not-found -o name | grep -q .; then
+      [[ -n "$api" ]] || { printf 'Could not parse OCM API endpoint from clusteradm output.\n' >&2; return 1; }
+      if ! clusteradm join --hub-token "$token" --hub-apiserver "$api" --bundle-version v1.3.1 --wait --cluster-name "$cluster_name" --force-internal-endpoint-lookup --context "$context"; then
+        printf 'clusteradm join could not render its embedded chart; installing the official OCM klusterlet chart v1.3.1.\n' >&2
+        helm repo add ocm https://open-cluster-management.io/helm-charts --force-update
+        helm repo update ocm
+        local hub_cluster_name ca_data bootstrap_config
+        hub_cluster_name="${hub_context#k3d-}"
+        ca_data="$(kubectl --context "$hub_context" config view --raw --flatten --minify -o json | jq -r '.clusters[0].cluster["certificate-authority-data"] // ""')"
+        [[ -n "$ca_data" ]] || { printf 'OCM hub kubeconfig has no embedded CA certificate.\n' >&2; return 1; }
+        bootstrap_config="$(mktemp)"
+        cat >"$bootstrap_config" <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+- name: hub
+  cluster:
+    server: https://k3d-${hub_cluster_name}-server-0:6443
+    certificate-authority-data: ${ca_data}
+users:
+- name: bootstrap
+  user:
+    token: ${token}
+contexts:
+- name: bootstrap
+  context:
+    cluster: hub
+    user: bootstrap
+current-context: bootstrap
+EOF
+        if ! helm upgrade --install klusterlet ocm/klusterlet --version 1.3.1 --kube-context "$context" --namespace open-cluster-management --create-namespace --set images.tag=v1.3.1 --set klusterlet.mode=Default --set klusterlet.clusterName="$cluster_name" --set klusterlet.namespace=open-cluster-management-agent --set-file "bootstrapHubKubeConfig=$bootstrap_config" --wait --timeout 5m; then
+          rm -f -- "$bootstrap_config"
+          return 1
+        fi
+        rm -f -- "$bootstrap_config"
+      fi
+    fi
+    local request_ready=false current pending_csrs attempt
+    for attempt in {1..36}; do
+      current="$(kubectl --context "$hub_context" get managedcluster "$cluster_name" --ignore-not-found -o name)"
+      pending_csrs="$(kubectl --context "$hub_context" get csr -o json | jq -r --arg prefix "${cluster_name}-" '[.items[]?.metadata.name | select(startswith($prefix))] | length')"
+      if [[ -n "$current" && "$pending_csrs" -gt 0 ]]; then request_ready=true; break; fi
+      sleep 5
+    done
+    [[ "$request_ready" == true ]] || { printf 'Timed out waiting for OCM registration request from %s.\n' "$cluster_name" >&2; return 1; }
     clusteradm accept --clusters "$cluster_name" --context "$hub_context"
   fi
   kubectl --context "$hub_context" label managedcluster "$cluster_name" "lab.gitops/managed-by=$managed_by" --overwrite

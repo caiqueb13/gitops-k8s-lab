@@ -1,68 +1,72 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')]
-    [string]$HubName = 'ocm-hub',
-
-    [ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')]
-    [string]$SpokeName = 'ocm-demo',
-
+    [ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')][string]$HubName = 'ocm-hub',
+    [ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')][string]$FluxClusterName = 'ocm-flux-demo',
+    [ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')][string]$PlainClusterName = 'ocm-plain-demo',
+    [string]$GitUrl = 'https://github.com/caiqueb13/gitops-k8s-lab.git',
     [string]$K3sImage = 'rancher/k3s:v1.34.12-k3s1'
 )
 
 $ErrorActionPreference = 'Stop'
-foreach ($tool in @('k3d', 'kubectl', 'clusteradm', 'docker')) {
-    if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
-        throw "Required command '$tool' was not found in PATH."
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+foreach ($tool in @('k3d', 'kubectl', 'clusteradm', 'docker', 'flux')) {
+    if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Required command '$tool' was not found in PATH." }
+}
+if ($FluxClusterName -eq $PlainClusterName -or $FluxClusterName -eq $HubName -or $PlainClusterName -eq $HubName) {
+    throw 'Hub, Flux demo, and plain demo cluster names must be different.'
+}
+
+$HubContext = "k3d-$HubName"
+$FluxContext = "k3d-$FluxClusterName"
+$PlainContext = "k3d-$PlainClusterName"
+$SharedNetwork = "k3d-$HubName"
+
+function Ensure-Spoke {
+    param([string]$Name)
+    $clustersJson = & k3d cluster list -o json
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to read the k3d cluster inventory.' }
+    $clusters = ConvertFrom-Json -InputObject ($clustersJson -join [Environment]::NewLine)
+    if (-not ($clusters | Where-Object { $_.name -eq $Name })) {
+        Write-Host "Creating '$Name' on shared Docker network '$SharedNetwork'..." -ForegroundColor Cyan
+        & k3d cluster create $Name --image $K3sImage --network $SharedNetwork --wait --timeout 5m
+        if ($LASTEXITCODE -ne 0) { throw "Failed to create demo cluster '$Name'." }
+    }
+    $context = "k3d-$Name"
+    & kubectl --context $context cluster-info *> $null
+    if ($LASTEXITCODE -ne 0) { throw "Cluster context '$context' is not reachable." }
+    $container = "k3d-$Name-server-0"
+    $networksJson = & docker inspect $container --format '{{json .NetworkSettings.Networks}}'
+    if ($LASTEXITCODE -ne 0) { throw "Unable to inspect demo node '$container'." }
+    $networks = $networksJson | ConvertFrom-Json
+    if ($SharedNetwork -notin @($networks.PSObject.Properties | ForEach-Object { $_.Name })) {
+        throw "Cluster '$Name' is not attached to '$SharedNetwork'. Delete only that demo cluster and rerun the script."
     }
 }
 
-$RepoRoot = Split-Path -Parent $PSScriptRoot
-$HubContext = "k3d-$HubName"
-$SpokeContext = "k3d-$SpokeName"
-$SharedNetwork = "k3d-$HubName"
-
 Write-Host 'Preparing the OCM hub...' -ForegroundColor Cyan
 & (Join-Path $RepoRoot 'scripts/new-ocm-hub.ps1') -Name $HubName -K3sImage $K3sImage
-if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'Could not prepare the OCM hub.' }
-
-$null = & docker network inspect $SharedNetwork 2>$null
-if ($LASTEXITCODE -ne 0) {
-    throw "Expected k3d network '$SharedNetwork' was not found. The OCM hub must be created by scripts/new-ocm-hub.ps1."
-}
-
-$ClustersJson = & k3d cluster list -o json
-if ($LASTEXITCODE -ne 0) { throw 'Unable to read the k3d cluster inventory.' }
-$Clusters = ConvertFrom-Json -InputObject ($ClustersJson -join [Environment]::NewLine)
-if (-not ($Clusters | Where-Object { $_.name -eq $SpokeName })) {
-    Write-Host "Creating demo spoke '$SpokeName' on shared Docker network '$SharedNetwork'..." -ForegroundColor Cyan
-    & k3d cluster create $SpokeName --image $K3sImage --network $SharedNetwork --wait --timeout 5m
-    if ($LASTEXITCODE -ne 0) { throw "Failed to create demo cluster '$SpokeName'." }
-}
-
 & kubectl --context $HubContext cluster-info *> $null
-if ($LASTEXITCODE -ne 0) { throw "Hub context '$HubContext' is not reachable. Make sure the hub is running." }
-& kubectl --context $SpokeContext cluster-info *> $null
-if ($LASTEXITCODE -ne 0) { throw "Spoke context '$SpokeContext' is not reachable. Make sure the demo cluster is running." }
+if ($LASTEXITCODE -ne 0) { throw "Hub context '$HubContext' is not reachable." }
 
-$SpokeContainer = "k3d-$SpokeName-server-0"
-$SpokeNetworksJson = & docker inspect $SpokeContainer --format '{{json .NetworkSettings.Networks}}'
-if ($LASTEXITCODE -ne 0) { throw "Unable to inspect demo node '$SpokeContainer'." }
-$SpokeNetworks = $SpokeNetworksJson | ConvertFrom-Json
-$SpokeNetworkNames = @($SpokeNetworks.PSObject.Properties | ForEach-Object { $_.Name })
-if ($SharedNetwork -notin $SpokeNetworkNames) {
-    throw "Demo cluster '$SpokeName' is not attached to '$SharedNetwork'. Delete only that demo cluster and rerun this script."
-}
+Ensure-Spoke -Name $FluxClusterName
+Ensure-Spoke -Name $PlainClusterName
 
-Write-Host 'Registering the demo spoke with OCM...' -ForegroundColor Cyan
-& (Join-Path $RepoRoot 'scripts/register-ocm-cluster.ps1') -Context $SpokeContext -ClusterName $SpokeName -HubContext $HubContext -ManagedBy ocm-demo
-if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'OCM registration failed.' }
+Write-Host "Installing Flux and reconciling Kyverno from $GitUrl on '$FluxClusterName'..." -ForegroundColor Cyan
+& (Join-Path $RepoRoot 'scripts/bootstrap-context.ps1') -Name $FluxClusterName -Context $FluxContext -GitUrl $GitUrl
+
+Write-Host 'Registering both spokes with OCM...' -ForegroundColor Cyan
+& (Join-Path $RepoRoot 'scripts/register-ocm-cluster.ps1') -Context $FluxContext -ClusterName $FluxClusterName -HubContext $HubContext -ManagedBy ocm-demo
+& (Join-Path $RepoRoot 'scripts/register-ocm-cluster.ps1') -Context $PlainContext -ClusterName $PlainClusterName -HubContext $HubContext -ManagedBy ocm-demo
 
 Write-Host "`nManaged clusters visible to OCM on '$HubContext':" -ForegroundColor Green
 & kubectl --context $HubContext get managedclusters
-if ($LASTEXITCODE -ne 0) { throw 'Unable to list OCM ManagedClusters.' }
+Write-Host "`nManagedCluster details:" -ForegroundColor Green
+& kubectl --context $HubContext get managedcluster $FluxClusterName $PlainClusterName -o wide
 
-Write-Host "`nDemo cluster details and registration conditions:" -ForegroundColor Green
-& kubectl --context $HubContext get managedcluster $SpokeName -o yaml
-if ($LASTEXITCODE -ne 0) { throw "Unable to show ManagedCluster '$SpokeName'." }
+Write-Host "`nFlux and Kyverno on '$FluxClusterName' (expected present and healthy):" -ForegroundColor Green
+& flux get all -A --context $FluxContext
+& kubectl --context $FluxContext -n flux-system get helmrelease kyverno
 
-Write-Host "`nThis demo installs OCM only; it does not install Flux or Kyverno on '$SpokeName'." -ForegroundColor Yellow
+Write-Host "`nFlux and Kyverno on '$PlainClusterName' (expected absent):" -ForegroundColor Yellow
+& kubectl --context $PlainContext get namespaces flux-system kyverno --ignore-not-found
+Write-Host "`nOCM tracks both clusters; only '$FluxClusterName' receives Flux and Kyverno." -ForegroundColor Cyan

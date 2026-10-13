@@ -19,13 +19,13 @@ Essa descoberta é local ao computador e ao runtime k3d. O OCM registra os clust
 
 - Windows 10/11 e PowerShell 7 recomendado (os scripts usam APIs .NET disponíveis também no Windows PowerShell 5.1).
 - Docker Desktop/Engine em execução, ou runtime compatível com k3d.
-- `k3d`, `kubectl`, `flux` e `clusteradm` no `PATH` para o fluxo OCM.
+- `k3d`, `kubectl`, `flux`, `clusteradm` e Helm 3+ no `PATH` para o fluxo OCM.
 - Repositório Git acessível por HTTPS pelos clusters. Para começar, use repositório público. Repositórios privados exigem um Secret Flux configurado fora do Git.
 
 Confirme as ferramentas antes de começar:
 
 ```powershell
-Get-Command k3d, kubectl, flux, clusteradm, git
+Get-Command k3d, kubectl, flux, clusteradm, helm, git
 docker info
 ```
 
@@ -56,7 +56,7 @@ O hub OCM é um cluster k3d separado que mantém o inventário. O script cria `o
 ./scripts/new-ocm-hub.ps1
 ```
 
-O contexto padrão do hub é `k3d-ocm-hub`. Em Ubuntu, instale `jq` além de k3d, kubectl, Flux e clusteradm e use o script Bash equivalente:
+O contexto padrão do hub é `k3d-ocm-hub`. Os scripts usam os charts oficiais OCM v1.3.1 como fallback se o `clusteradm` não conseguir renderizar os charts embutidos. Em Ubuntu, instale `jq` além de k3d, kubectl, Flux, clusteradm e Helm e use o script Bash equivalente:
 
 ```bash
 bash scripts/linux/new-ocm-hub.sh
@@ -64,7 +64,7 @@ bash scripts/linux/new-ocm-hub.sh
 
 O onboarding instala componentes no cluster de destino e exige que a identidade do contexto Kubernetes tenha privilégios suficientes para criar CRDs, deployments e RBAC. Para registrar spokes no OCM local, eles precisam alcançar o hub. O uso de `--force-internal-endpoint-lookup` é apropriado para os clusters locais deste lab; clusters remotos precisam de um endpoint do hub acessível por rede.
 
-Para uma demonstração mínima, que cria/reutiliza o hub e um spoke sem instalar Flux/Kyverno, rode `./Scenarios/ocm-basic-demo.ps1` no Windows ou `bash Scenarios/ocm-basic-demo.sh` no Ubuntu. O roteiro e a limpeza estão em [Scenarios/README.md](Scenarios/README.md).
+Para comparar onboarding, rode `./Scenarios/ocm-basic-demo.ps1` no Windows ou `bash Scenarios/ocm-basic-demo.sh` no Ubuntu. O cenário registra dois spokes no OCM: um com Flux e Kyverno via GitOps e outro sem esses componentes. O roteiro e a limpeza estão em [Scenarios/README.md](Scenarios/README.md).
 
 ## Criar três clusters locais
 
