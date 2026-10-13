@@ -1,0 +1,3 @@
+# Add one exact, non-k3d kubeconfig context name per line when a cluster
+# should be included without automatic k3d discovery.
+# external-test-context

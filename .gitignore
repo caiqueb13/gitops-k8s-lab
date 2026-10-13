@@ -7,6 +7,10 @@ kubeconfig
 *.pem
 *.key
 *.pfx
+observability/contexts.txt
+observability/.state/
+__pycache__/
+*.pyc
 
 # OpenTofu/Terraform local state and provider cache
 .terraform/

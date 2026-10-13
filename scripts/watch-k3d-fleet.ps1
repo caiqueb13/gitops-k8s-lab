@@ -9,8 +9,6 @@ param(
 
     [string]$ContextPattern = '^k3d-',
 
-    [string]$HubContext = 'k3d-ocm-hub',
-
     [ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')]
     [string]$GitSecretName
 )
@@ -19,7 +17,7 @@ $ErrorActionPreference = 'Stop'
 Write-Host "Watching local k3d clusters every $IntervalSeconds seconds. Press Ctrl+C to stop." -ForegroundColor Cyan
 while ($true) {
     try {
-        & (Join-Path $PSScriptRoot 'sync-k3d-fleet.ps1') -GitUrl $GitUrl -ContextPattern $ContextPattern -HubContext $HubContext -GitSecretName $GitSecretName
+        & (Join-Path $PSScriptRoot 'sync-k3d-fleet.ps1') -GitUrl $GitUrl -ContextPattern $ContextPattern -GitSecretName $GitSecretName
     }
     catch {
         Write-Warning "Fleet reconciliation failed: $($_.Exception.Message). Retrying after the interval."
