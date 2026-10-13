@@ -64,6 +64,8 @@ bash scripts/linux/new-ocm-hub.sh
 
 Onboarding installs components in the target cluster and requires the Kubernetes identity in that context to have enough permissions to create CRDs, deployments, and RBAC. Spokes must be able to reach the local OCM hub. `--force-internal-endpoint-lookup` is intended for this lab's local clusters; remote clusters need a network-reachable hub endpoint.
 
+For a minimal demo that creates/reuses the hub and one spoke without installing Flux/Kyverno, run `./Scenarios/ocm-basic-demo.ps1` on Windows or `bash Scenarios/ocm-basic-demo.sh` on Ubuntu. See [Scenarios/README.en.md](Scenarios/README.en.md) for the steps and cleanup.
+
 ## Create three local clusters
 
 From the workspace root:

@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Context,
     [Parameter(Mandatory = $true)][ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')][string]$ClusterName,
     [string]$HubContext = 'k3d-ocm-hub',
-    [ValidateSet('k3d-fleet', 'explicit')][string]$ManagedBy = 'explicit'
+    [ValidateSet('k3d-fleet', 'explicit', 'ocm-demo')][string]$ManagedBy = 'explicit'
 )
 
 $ErrorActionPreference = 'Stop'
