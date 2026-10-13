@@ -33,6 +33,18 @@ if (-not (Test-Path -LiteralPath $TemplatePath)) {
 }
 
 Write-Host "Checking Kubernetes context '$Context'..." -ForegroundColor Cyan
+if ($env:OS -eq 'Windows_NT') {
+    $ContextConfigJson = & kubectl config view --minify --context $Context -o json
+    if ($LASTEXITCODE -ne 0) { throw "Unable to read kubeconfig context '$Context'." }
+    $ContextConfig = $ContextConfigJson | ConvertFrom-Json
+    $ClusterEntry = $ContextConfig.clusters | Select-Object -First 1
+    if ($ClusterEntry -and ([uri]$ClusterEntry.cluster.server).Host -eq 'host.docker.internal') {
+        $ApiPort = ([uri]$ClusterEntry.cluster.server).Port
+        $LocalServer = "https://127.0.0.1:$ApiPort"
+        Write-Host "Using localhost for the k3d API endpoint: $LocalServer" -ForegroundColor Cyan
+        Invoke-Checked -FilePath 'kubectl' -Arguments @('config', 'set-cluster', $ClusterEntry.name, "--server=$LocalServer")
+    }
+}
 Invoke-Checked -FilePath 'kubectl' -Arguments @('--context', $Context, 'cluster-info')
 Invoke-Checked -FilePath 'flux' -Arguments @('check', '--pre', '--context', $Context)
 
