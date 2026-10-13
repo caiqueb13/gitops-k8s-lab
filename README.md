@@ -88,15 +88,25 @@ O watcher precisa continuar em execução. Ele não é um serviço Windows nem s
 
 ## Verificar reconciliação
 
+Para acessar um cluster, use o contexto `k3d-<nome>`. Confira o contexto ativo antes de executar comandos para evitar atuar no cluster errado:
+
+```powershell
+kubectl config get-contexts
+kubectl config use-context k3d-aks-sim
+kubectl config current-context
+```
+
+Também é possível informar `--context` em cada comando, sem alterar o contexto ativo. Valide os componentes instalados no cluster:
+
 ```powershell
 k3d cluster list
-kubectl config get-contexts
 flux get all -A --context k3d-aks-sim
 kubectl --context k3d-aks-sim get pods -n kyverno
 kubectl --context k3d-aks-sim get helmreleases -n flux-system
+kubectl --context k3d-aks-sim get pods -n flux-system
 ```
 
-Repita os dois últimos comandos para `k3d-eks-sim` e `k3d-gke-sim`. Para observar status e eventos de falha:
+Espere os recursos Flux aparecerem como `Ready=True`, Kyverno ficar `Running` e o HelmRelease `kyverno` ficar `Ready=True`. Repita usando `k3d-eks-sim` e `k3d-gke-sim` para validar os outros clusters. Para observar status e eventos de falha:
 
 ```powershell
 flux get sources all -A --context k3d-aks-sim
@@ -113,7 +123,24 @@ Edite os manifests, faça commit e push; os clusters consultam Git a cada minuto
 
 ## Limpeza local
 
-A exclusão de cluster é destrutiva para workloads e dados locais daquele cluster. Confira os nomes antes e exclua apenas os clusters deste laboratório:
+Para apenas encerrar o laboratório e liberar CPU e memória, pare o watcher com `Ctrl+C` na janela em que ele está rodando. Em seguida, confira os clusters e pare somente os clusters deste laboratório. A parada preserva os dados e workloads para uso posterior:
+
+```powershell
+k3d cluster list
+k3d cluster stop aks-sim
+k3d cluster stop eks-sim
+k3d cluster stop gke-sim
+```
+
+Para retomar o laboratório:
+
+```powershell
+k3d cluster start aks-sim
+k3d cluster start eks-sim
+k3d cluster start gke-sim
+```
+
+Para excluir definitivamente os clusters, confira os nomes e execute os comandos individualmente. Essa operação remove os clusters, workloads e dados locais associados:
 
 ```powershell
 k3d cluster list
