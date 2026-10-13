@@ -75,6 +75,15 @@ Para descoberta contínua enquanto essa sessão PowerShell estiver aberta:
 ./scripts/watch-k3d-fleet.ps1 -GitUrl $GitUrl -IntervalSeconds 60
 ```
 
+Exemplo: crie manualmente um quarto cluster no mesmo Docker Desktop. A próxima varredura vai encontrá-lo pelo inventário k3d e instalar Flux/Kyverno:
+
+```powershell
+k3d cluster create dev04 --image rancher/k3s:v1.34.12-k3s1 --wait --timeout 5m
+./scripts/sync-k3d-fleet.ps1 -GitUrl $GitUrl
+```
+
+Com `watch-k3d-fleet.ps1` em execução, essa inclusão acontece na próxima varredura. Ao remover um cluster (`k3d cluster delete dev04`), ele deixa de ser alvo na varredura seguinte. O contexto antigo, se permanecer no kubeconfig, é ignorado porque a fonte autoritativa local é `k3d cluster list`.
+
 O watcher precisa continuar em execução. Ele não é um serviço Windows nem sobrevive a logout/reboot. Para execução contínua, pode-se criar uma tarefa agendada após validar o fluxo; a tarefa deve usar a mesma conta e runtime que possuem os clusters k3d. A descoberta ocorre em até um intervalo após a criação. Ao parar o watcher, novos clusters não serão incluídos até a próxima varredura.
 
 ## Verificar reconciliação
