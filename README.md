@@ -38,24 +38,21 @@ Substitua o arquivo/argumentos conforme o comando que pretende executar. Em Powe
 
 ## Publicar o repositório no GitHub
 
-O diretório precisa ser um repositório Git e estar publicado para que os clusters possam clonar a configuração. Este workspace não está atualmente inicializado como repositório Git. No GitHub, crie um repositório vazio (sem README inicial) e, na raiz local, execute:
+O repositório público do laboratório foi criado em [github.com/caiqueb13/gitops-k8s-lab](https://github.com/caiqueb13/gitops-k8s-lab). Para autenticar novamente pelo navegador, instale GitHub CLI (`gh`) e rode `gh auth login --web`, escolhendo GitHub.com e HTTPS. O login autoriza o Git CLI no computador. Não passe tokens nos manifests ou no Git.
 
 ```powershell
-git init -b main
-git add .
-git commit -m "Initial multi-cluster GitOps lab"
-git remote add origin https://github.com/SEU-USUARIO/gitops-k8s-lab.git
-git push -u origin main
+git remote -v
+git status --short --branch
 ```
 
-Para autenticar pelo navegador, instale GitHub CLI (`gh`) e rode `gh auth login --web`, escolhendo GitHub.com e HTTPS. O login autoriza o Git CLI no computador. Não passe tokens nos manifests ou no Git. Depois de publicar, use a URL HTTPS real nos comandos abaixo. O workspace ainda não possui um remote nem um endereço de repositório definido; portanto, nenhum repositório foi criado/publicado por esta alteração.
+O remoto configurado é `https://github.com/caiqueb13/gitops-k8s-lab.git`. Ele é público para que os clusters façam clone sem Secret. Não armazene credenciais no repositório.
 
 ## Criar três clusters locais
 
 Na raiz do workspace:
 
 ```powershell
-$GitUrl = 'https://github.com/SEU-USUARIO/gitops-k8s-lab.git'
+$GitUrl = 'https://github.com/caiqueb13/gitops-k8s-lab.git'
 ./scripts/new-k3d-cluster.ps1 -Name aks-sim -GitUrl $GitUrl
 ./scripts/new-k3d-cluster.ps1 -Name eks-sim -GitUrl $GitUrl
 ./scripts/new-k3d-cluster.ps1 -Name gke-sim -GitUrl $GitUrl
