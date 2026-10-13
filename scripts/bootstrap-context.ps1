@@ -8,7 +8,10 @@ param(
     [ValidatePattern('^https://[^\s]+$')]
     [string]$GitUrl,
 
-    [string]$Context = "k3d-$Name"
+    [string]$Context = "k3d-$Name",
+
+    [ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')]
+    [string]$GitSecretName
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,7 +36,7 @@ if (-not (Test-Path -LiteralPath $TemplatePath)) {
 }
 
 Write-Host "Checking Kubernetes context '$Context'..." -ForegroundColor Cyan
-if ($env:OS -eq 'Windows_NT') {
+if ($env:OS -eq 'Windows_NT' -and $Context -like 'k3d-*') {
     $ContextConfigJson = & kubectl config view --minify --context $Context -o json
     if ($LASTEXITCODE -ne 0) { throw "Unable to read kubeconfig context '$Context'." }
     $ContextConfig = $ContextConfigJson | ConvertFrom-Json
@@ -49,20 +52,46 @@ Invoke-Checked -FilePath 'kubectl' -Arguments @('--context', $Context, 'cluster-
 $Controllers = & kubectl --context $Context -n flux-system get deployment source-controller kustomize-controller helm-controller notification-controller --ignore-not-found -o name
 if ($LASTEXITCODE -ne 0) { throw "Unable to inspect Flux controllers in '$Context'." }
 $Controllers = @($Controllers | Where-Object { $_ })
-if ($Controllers.Count -lt 4) {
+if ($Controllers.Count -eq 0) {
     Invoke-Checked -FilePath 'flux' -Arguments @('check', '--pre', '--context', $Context)
     Write-Host "Installing or completing Flux installation in '$Context'..." -ForegroundColor Cyan
     Invoke-Checked -FilePath 'flux' -Arguments @('install', '--context', $Context)
+}
+elseif ($Controllers.Count -lt 4) {
+    throw "Flux is only partially installed in '$Context' ($($Controllers.Count)/4 controllers). Repair it manually before onboarding; refusing to overwrite an unknown installation."
 }
 else {
     Write-Host "Flux controllers already exist in '$Context'; checking their health..." -ForegroundColor Cyan
     Invoke-Checked -FilePath 'flux' -Arguments @('check', '--context', $Context)
 }
+if ($GitSecretName) {
+    & kubectl --context $Context -n flux-system get secret $GitSecretName *> $null
+    if ($LASTEXITCODE -ne 0) { throw "Git authentication Secret '$GitSecretName' must already exist in namespace flux-system; the onboarding script never accepts or stores secret values." }
+}
+
+$ExistingGitJson = & kubectl --context $Context -n flux-system get gitrepository lab-config --ignore-not-found -o json
+if ($LASTEXITCODE -ne 0) { throw "Unable to inspect GitRepository/lab-config in '$Context'." }
+if ($ExistingGitJson) {
+    $ExistingGit = $ExistingGitJson | ConvertFrom-Json
+    $ExistingSecret = $ExistingGit.spec.secretRef.name
+    if ($ExistingGit.spec.url -ne $GitUrl -or $ExistingSecret -ne $GitSecretName) {
+        throw "GitRepository/lab-config already exists in '$Context' with a different URL or authentication Secret. Resolve the ownership conflict before onboarding."
+    }
+}
+$ExistingKustomizationJson = & kubectl --context $Context -n flux-system get kustomization kyverno --ignore-not-found -o json
+if ($LASTEXITCODE -ne 0) { throw "Unable to inspect Kustomization/kyverno in '$Context'." }
+if ($ExistingKustomizationJson) {
+    $ExistingKustomization = $ExistingKustomizationJson | ConvertFrom-Json
+    if ($ExistingKustomization.spec.path -ne './apps/kyverno' -or $ExistingKustomization.spec.sourceRef.name -ne 'lab-config') {
+        throw "Kustomization/kyverno already exists in '$Context' with a different path or source. Resolve the ownership conflict before onboarding."
+    }
+}
 
 $RenderedPath = Join-Path ([System.IO.Path]::GetTempPath()) ("flux-sync-{0}-{1}.yaml" -f $Name, [guid]::NewGuid().ToString('N'))
 try {
-    $Rendered = (Get-Content -LiteralPath $TemplatePath -Raw).Replace('__GIT_URL__', $GitUrl)
-    if ($Rendered.Contains('__GIT_URL__')) { throw 'The Git URL template was not fully rendered.' }
+    $SecretRef = if ($GitSecretName) { "  secretRef:`n    name: $GitSecretName" } else { '' }
+    $Rendered = (Get-Content -LiteralPath $TemplatePath -Raw).Replace('__GIT_URL__', $GitUrl).Replace('__GIT_SECRET_REF__', $SecretRef)
+    if ($Rendered.Contains('__GIT_URL__') -or $Rendered.Contains('__GIT_SECRET_REF__')) { throw 'The Git URL template was not fully rendered.' }
     [System.IO.File]::WriteAllText($RenderedPath, $Rendered, [System.Text.UTF8Encoding]::new($false))
 
     Write-Host "Configuring GitOps sync from $GitUrl..." -ForegroundColor Cyan
