@@ -16,8 +16,13 @@ foreach ($tool in @('k3d', 'kubectl', 'flux')) {
 
 $ClustersJson = & k3d cluster list -o json
 if ($LASTEXITCODE -ne 0) { throw 'Unable to read the active k3d cluster inventory.' }
-$Clusters = @($ClustersJson | ConvertFrom-Json)
-$Targets = @($Clusters | Where-Object { $_ -and $_.name } | ForEach-Object { "k3d-$($_.name)" } | Where-Object { $_ -match $ContextPattern })
+$Clusters = ConvertFrom-Json -InputObject ($ClustersJson -join [Environment]::NewLine)
+$Targets = @()
+foreach ($Cluster in $Clusters) {
+    if (-not $Cluster -or -not $Cluster.name) { continue }
+    $ContextName = "k3d-$($Cluster.name)"
+    if ($ContextName -match $ContextPattern) { $Targets += $ContextName }
+}
 if ($Targets.Count -eq 0) {
     Write-Host "No contexts matched '$ContextPattern'. Nothing to bootstrap." -ForegroundColor Yellow
     return

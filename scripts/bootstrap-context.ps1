@@ -46,10 +46,18 @@ if ($env:OS -eq 'Windows_NT') {
     }
 }
 Invoke-Checked -FilePath 'kubectl' -Arguments @('--context', $Context, 'cluster-info')
-Invoke-Checked -FilePath 'flux' -Arguments @('check', '--pre', '--context', $Context)
-
-Write-Host "Installing or reconciling Flux in '$Context'..." -ForegroundColor Cyan
-Invoke-Checked -FilePath 'flux' -Arguments @('install', '--context', $Context)
+$Controllers = & kubectl --context $Context -n flux-system get deployment source-controller kustomize-controller helm-controller notification-controller --ignore-not-found -o name
+if ($LASTEXITCODE -ne 0) { throw "Unable to inspect Flux controllers in '$Context'." }
+$Controllers = @($Controllers | Where-Object { $_ })
+if ($Controllers.Count -lt 4) {
+    Invoke-Checked -FilePath 'flux' -Arguments @('check', '--pre', '--context', $Context)
+    Write-Host "Installing or completing Flux installation in '$Context'..." -ForegroundColor Cyan
+    Invoke-Checked -FilePath 'flux' -Arguments @('install', '--context', $Context)
+}
+else {
+    Write-Host "Flux controllers already exist in '$Context'; checking their health..." -ForegroundColor Cyan
+    Invoke-Checked -FilePath 'flux' -Arguments @('check', '--context', $Context)
+}
 
 $RenderedPath = Join-Path ([System.IO.Path]::GetTempPath()) ("flux-sync-{0}-{1}.yaml" -f $Name, [guid]::NewGuid().ToString('N'))
 try {
