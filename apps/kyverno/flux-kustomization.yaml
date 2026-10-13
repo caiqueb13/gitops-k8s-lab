@@ -1,0 +1,2 @@
+# Kustomization/kyverno is created by scripts/bootstrap-context.ps1.
+# This file is intentionally not included by apps/kyverno/kustomization.yaml.

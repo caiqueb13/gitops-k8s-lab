@@ -1,0 +1,16 @@
+# Credentials and local Kubernetes access files
+.env
+.env.*
+!.env.example
+*.kubeconfig
+kubeconfig
+*.pem
+*.key
+*.pfx
+
+# OpenTofu/Terraform local state and provider cache
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json

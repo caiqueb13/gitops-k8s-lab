@@ -1,0 +1,3 @@
+# GitRepository/lab-config is created by scripts/bootstrap-context.ps1.
+# Keep this file as a pointer to the single bootstrap-owned definition; do not
+# add it to apps/kyverno/kustomization.yaml or it will overwrite the live URL.

@@ -1,0 +1,26 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kyverno
+  namespace: flux-system
+spec:
+  interval: 10m
+  releaseName: kyverno
+  targetNamespace: kyverno
+  storageNamespace: flux-system
+  chart:
+    spec:
+      chart: kyverno
+      # LAB MODE: follows the newest chart version available in the Helm repository.
+      # For production, consider pinning a tested version and automating PR-based updates.
+      version: "*"
+      sourceRef:
+        kind: HelmRepository
+        name: kyverno
+      interval: 10m
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
